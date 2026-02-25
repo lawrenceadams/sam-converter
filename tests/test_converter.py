@@ -6,6 +6,7 @@ from sam_converter.converter import (
     extract_table_references,
     convert_file,
     convert_directory,
+    TableRef,
 )
 
 
@@ -50,19 +51,19 @@ class TestExtractTableReferences:
         sql = "SELECT * FROM database.schema.table"
         refs = extract_table_references(sql)
         assert len(refs) == 1
-        assert refs[0] == {"database": "database", "schema": "schema", "table": "table"}
+        assert refs[0] == TableRef(database="database", schema="schema", table="table")
 
     def test_schema_qualified_table(self):
         sql = "SELECT * FROM schema.table"
         refs = extract_table_references(sql)
         assert len(refs) == 1
-        assert refs[0] == {"database": "", "schema": "schema", "table": "table"}
+        assert refs[0] == TableRef(database="", schema="schema", table="table")
 
     def test_unqualified_table(self):
         sql = "SELECT * FROM my_table"
         refs = extract_table_references(sql)
         assert len(refs) == 1
-        assert refs[0] == {"database": "", "schema": "", "table": "my_table"}
+        assert refs[0] == TableRef(database="", schema="", table="my_table")
 
     def test_multiple_tables_from_join(self):
         sql = """
@@ -73,7 +74,7 @@ class TestExtractTableReferences:
         refs = extract_table_references(sql)
         assert len(refs) == 3
 
-        tables = {r["table"] for r in refs}
+        tables = {r.table for r in refs}
         assert tables == {"table1", "table2", "table3"}
 
     def test_subquery_tables(self):
@@ -84,7 +85,7 @@ class TestExtractTableReferences:
         JOIN db.schema.outer_table ON sub.id = outer_table.id
         """
         refs = extract_table_references(sql)
-        tables = {r["table"] for r in refs}
+        tables = {r.table for r in refs}
         assert "inner_table" in tables
         assert "outer_table" in tables
 
@@ -97,7 +98,7 @@ class TestExtractTableReferences:
         JOIN db.schema.other_table ON cte.id = other_table.id
         """
         refs = extract_table_references(sql)
-        tables = {r["table"] for r in refs}
+        tables = {r.table for r in refs}
         assert "source_table" in tables
         assert "other_table" in tables
 
@@ -116,19 +117,20 @@ class TestExtractTableReferences:
 
 
 class TestConvertFile:
-    def test_converts_file_and_returns_refs(self, tmp_input_dir: Path, tmp_output_dir: Path):
+    def test_converts_file_and_returns_result(self, tmp_input_dir: Path, tmp_output_dir: Path):
         input_file = tmp_input_dir / "test.sql"
         input_file.write_text("SELECT GETDATE() FROM db.schema.my_table")
 
         output_file = tmp_output_dir / "test.sql"
-        refs = convert_file(input_file, output_file)
+        result = convert_file(input_file, output_file)
 
         assert output_file.exists()
         content = output_file.read_text()
         assert "CURRENT_TIMESTAMP()" in content
 
-        assert len(refs) == 1
-        assert refs[0]["table"] == "my_table"
+        assert result.model_name == "test"
+        assert len(result.table_refs) == 1
+        assert result.table_refs[0].table == "my_table"
 
     def test_creates_output_directory(self, tmp_input_dir: Path, tmp_path: Path):
         input_file = tmp_input_dir / "test.sql"
@@ -145,30 +147,38 @@ class TestConvertDirectory:
         (tmp_input_dir / "file1.sql").write_text("SELECT * FROM db.schema.table1")
         (tmp_input_dir / "file2.sql").write_text("SELECT * FROM db.schema.table2")
 
-        refs = convert_directory(tmp_input_dir, tmp_output_dir)
+        results = convert_directory(tmp_input_dir, tmp_output_dir)
 
-        assert len(refs) == 2
-        assert (tmp_output_dir / "file1" / "file1.sql").exists()
-        assert (tmp_output_dir / "file2" / "file2.sql").exists()
+        assert len(results) == 2
+        assert (tmp_output_dir / "file1.sql").exists()
+        assert (tmp_output_dir / "file2.sql").exists()
 
     def test_ignores_non_sql_files(self, tmp_input_dir: Path, tmp_output_dir: Path):
         (tmp_input_dir / "file.sql").write_text("SELECT 1")
         (tmp_input_dir / "file.txt").write_text("not sql")
 
-        refs = convert_directory(tmp_input_dir, tmp_output_dir)
+        results = convert_directory(tmp_input_dir, tmp_output_dir)
 
-        assert len(refs) == 1
+        assert len(results) == 1
 
     def test_empty_directory(self, tmp_input_dir: Path, tmp_output_dir: Path):
-        refs = convert_directory(tmp_input_dir, tmp_output_dir)
-        assert refs == {}
+        results = convert_directory(tmp_input_dir, tmp_output_dir)
+        assert results == []
 
     def test_handles_nested_sql_files(self, tmp_input_dir: Path, tmp_output_dir: Path):
         nested = tmp_input_dir / "subdir"
         nested.mkdir()
         (nested / "nested.sql").write_text("SELECT * FROM db.schema.nested_table")
 
-        refs = convert_directory(tmp_input_dir, tmp_output_dir)
+        results = convert_directory(tmp_input_dir, tmp_output_dir)
 
-        assert len(refs) == 1
-        assert (tmp_output_dir / "nested" / "nested.sql").exists()
+        assert len(results) == 1
+        assert (tmp_output_dir / "nested.sql").exists()
+
+    def test_results_contain_model_names(self, tmp_input_dir: Path, tmp_output_dir: Path):
+        (tmp_input_dir / "my_model.sql").write_text("SELECT 1")
+
+        results = convert_directory(tmp_input_dir, tmp_output_dir)
+
+        assert len(results) == 1
+        assert results[0].model_name == "my_model"

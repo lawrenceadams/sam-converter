@@ -1,10 +1,33 @@
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import sqlglot
 from sqlglot import exp
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TableRef:
+    database: str
+    schema: str
+    table: str
+
+    def __hash__(self):
+        return hash((self.database, self.schema, self.table))
+
+    def __eq__(self, other):
+        if not isinstance(other, TableRef):
+            return False
+        return (self.database, self.schema, self.table) == (other.database, other.schema, other.table)
+
+
+@dataclass
+class ConversionResult:
+    model_name: str
+    output_path: Path
+    table_refs: list[TableRef] = field(default_factory=list)
 
 
 def transpile_tsql_to_snowflake(sql: str) -> str:
@@ -16,12 +39,12 @@ def transpile_tsql_to_snowflake(sql: str) -> str:
         raise
 
 
-def extract_table_references(sql: str) -> list[dict]:
+def extract_table_references(sql: str) -> list[TableRef]:
     """
     Extract all table references from SQL.
-    Returns a list of dicts with database, schema, and table names.
+    Returns a list of TableRef objects with database, schema, and table names.
     """
-    tables = []
+    tables: list[TableRef] = []
     try:
         parsed = sqlglot.parse(sql, read="tsql")
     except sqlglot.errors.ParseError as e:
@@ -39,11 +62,11 @@ def extract_table_references(sql: str) -> list[dict]:
             if not table_name:
                 continue
 
-            table_ref = {
-                "database": database_name or "",
-                "schema": schema_name or "",
-                "table": table_name,
-            }
+            table_ref = TableRef(
+                database=database_name or "",
+                schema=schema_name or "",
+                table=table_name,
+            )
 
             if table_ref not in tables:
                 tables.append(table_ref)
@@ -56,13 +79,14 @@ def extract_table_references(sql: str) -> list[dict]:
     return tables
 
 
-def convert_file(input_path: Path, output_path: Path) -> list[dict]:
+def convert_file(input_path: Path, output_path: Path) -> ConversionResult:
     """
     Convert a single T-SQL file to Snowflake SQL.
-    Returns list of table references found in the file.
+    Returns ConversionResult with model name and table references.
     """
     logger.info(f"Converting {input_path}")
 
+    model_name = input_path.stem
     sql = input_path.read_text(encoding="utf-8")
 
     table_refs = extract_table_references(sql)
@@ -74,31 +98,34 @@ def convert_file(input_path: Path, output_path: Path) -> list[dict]:
 
     logger.info(f"Wrote converted SQL to {output_path}")
 
-    return table_refs
+    return ConversionResult(
+        model_name=model_name,
+        output_path=output_path,
+        table_refs=table_refs,
+    )
 
 
-def convert_directory(input_dir: Path, output_dir: Path) -> dict[str, list[dict]]:
+def convert_directory(input_dir: Path, output_dir: Path) -> list[ConversionResult]:
     """
     Convert all SQL files in a directory.
-    Returns a dict mapping output file paths to their table references.
+    Returns a list of ConversionResult objects.
     """
-    all_refs: dict[str, list[dict]] = {}
+    results: list[ConversionResult] = []
 
     sql_files = list(input_dir.rglob("*.sql"))
 
     if not sql_files:
         logger.warning(f"No SQL files found in {input_dir}")
-        return all_refs
+        return results
 
     for input_file in sql_files:
-        relative_path = input_file.relative_to(input_dir)
-        output_file = output_dir / relative_path.stem / f"{relative_path.stem}.sql"
+        output_file = output_dir / f"{input_file.stem}.sql"
 
         try:
-            refs = convert_file(input_file, output_file)
-            all_refs[str(output_file)] = refs
+            result = convert_file(input_file, output_file)
+            results.append(result)
         except Exception as e:
             logger.error(f"Failed to convert {input_file}: {e}")
             continue
 
-    return all_refs
+    return results

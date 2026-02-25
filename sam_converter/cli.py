@@ -5,7 +5,7 @@ from pathlib import Path
 import click
 
 from sam_converter.converter import convert_directory
-from sam_converter.extractor import extract_sources
+from sam_converter.extractor import categorize_refs, extract_sources, extract_refs
 
 
 def setup_logging(verbose: bool) -> None:
@@ -37,11 +37,19 @@ def main(input_dir: Path, output: Path, verbose: bool) -> None:
 
     logger.info(f"Converting SQL files from {input_dir} to {output}")
 
-    table_refs = convert_directory(input_dir, output)
+    results = convert_directory(input_dir, output)
 
-    if table_refs:
-        extract_sources(table_refs, output)
-        logger.info(f"Conversion complete. {len(table_refs)} files processed.")
+    if results:
+        categorized = categorize_refs(results)
+        extract_sources(categorized, output)
+        extract_refs(categorized, output)
+
+        ref_count = sum(len(c.refs) for c in categorized)
+        source_count = sum(len(c.sources) for c in categorized)
+        logger.info(
+            f"Conversion complete. {len(results)} files processed. "
+            f"{ref_count} model refs, {source_count} source refs found."
+        )
     else:
         logger.warning("No files were converted.")
 
