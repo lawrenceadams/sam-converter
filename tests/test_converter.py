@@ -102,6 +102,43 @@ class TestExtractTableReferences:
         assert "source_table" in tables
         assert "other_table" in tables
 
+    def test_cte_names_excluded_from_refs(self):
+        """CTE names should not appear as table references."""
+        sql = """
+        WITH patient_cte AS (
+            SELECT * FROM db.schema.patients
+        ),
+        encounter_cte AS (
+            SELECT * FROM db.schema.encounters
+        )
+        SELECT * FROM patient_cte
+        JOIN encounter_cte ON patient_cte.id = encounter_cte.patient_id
+        """
+        refs = extract_table_references(sql)
+        tables = {r.table for r in refs}
+
+        # Real tables should be included
+        assert "patients" in tables
+        assert "encounters" in tables
+
+        # CTE names should NOT be included
+        assert "patient_cte" not in tables
+        assert "encounter_cte" not in tables
+
+    def test_cte_name_same_as_real_table(self):
+        """If a CTE has the same name as referenced elsewhere, only non-CTE refs count."""
+        sql = """
+        WITH my_table AS (
+            SELECT * FROM db.schema.source
+        )
+        SELECT * FROM my_table
+        """
+        refs = extract_table_references(sql)
+        tables = {r.table for r in refs}
+
+        assert "source" in tables
+        assert "my_table" not in tables
+
     def test_no_duplicate_references(self):
         sql = """
         SELECT * FROM db.schema.table1

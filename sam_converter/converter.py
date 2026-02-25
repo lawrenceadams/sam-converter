@@ -43,6 +43,7 @@ def extract_table_references(sql: str) -> list[TableRef]:
     """
     Extract all table references from SQL.
     Returns a list of TableRef objects with database, schema, and table names.
+    Excludes CTE names since they are defined within the query, not external tables.
     """
     tables: list[TableRef] = []
     try:
@@ -54,12 +55,23 @@ def extract_table_references(sql: str) -> list[TableRef]:
     for statement in parsed:
         if statement is None:
             continue
+
+        # Collect CTE names to exclude them from table references
+        cte_names: set[str] = set()
+        for cte in statement.find_all(exp.CTE):
+            if cte.alias:
+                cte_names.add(cte.alias.lower())
+
         for table in statement.find_all(exp.Table):
             table_name = table.name
             schema_name = table.db
             database_name = table.catalog
 
             if not table_name:
+                continue
+
+            # Skip CTEs - they're defined in the query, not external tables
+            if table_name.lower() in cte_names:
                 continue
 
             table_ref = TableRef(
