@@ -416,6 +416,30 @@ class TestExtractSources:
         assert tables["UPPERCASE"]["name"] == "UPPERCASE"
         assert "identifier" not in tables["UPPERCASE"]
 
+    def test_filters_out_base_tables(self, tmp_output_dir: Path):
+        """BASE tables are filtered out since non-BASE versions always exist."""
+        categorized = self._make_categorized([
+            TableRef(database="db", schema="schema", table="Patient"),
+            TableRef(database="db", schema="schema", table="PatientBASE"),
+            TableRef(database="db", schema="schema", table="MedicalHistory"),
+            TableRef(database="db", schema="schema", table="MedicalHistoryBASE"),
+        ])
+
+        extract_sources(categorized, tmp_output_dir)
+
+        sources_path = tmp_output_dir / "sources.yml"
+        with open(sources_path) as f:
+            sources = yaml.safe_load(f)
+
+        table_names = [t["name"] for t in sources["sources"][0]["tables"]]
+
+        # Non-BASE versions should exist
+        assert "patient" in table_names
+        assert "medical_history" in table_names
+        # BASE versions should be filtered out
+        assert "patient_base" not in table_names
+        assert "medical_history_base" not in table_names
+
 
 class TestExtractRefs:
     def test_creates_refs_yml_when_refs_exist(self, tmp_output_dir: Path):
@@ -644,3 +668,27 @@ class TestInjectDbtMacros:
         assert "{{ ref('{{ ref(" not in result
         # Count occurrences - should be exactly 2 (one for each table reference)
         assert result.count("{{ ref('WardHistoryAndLinkedShifts') }}") == 2
+
+    def test_base_source_maps_to_non_base_when_both_exist(self, tmp_output_dir: Path):
+        """PatientBASE should use source('...', 'patient') when Patient also exists."""
+        sql_file = tmp_output_dir / "model.sql"
+        sql_file.write_text("SELECT * FROM db.schema.PatientBASE")
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model",
+                output_path=sql_file,
+                refs=[],
+                sources=[
+                    TableRef(database="db", schema="schema", table="Patient"),
+                    TableRef(database="db", schema="schema", table="PatientBASE"),
+                ],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        # Should use 'patient' not 'patient_base'
+        assert "{{ source('db_schema', 'patient') }}" in result
+        assert "patient_base" not in result

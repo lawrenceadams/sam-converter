@@ -126,6 +126,7 @@ def extract_sources(categorized: list[CategorizedRefs], output_dir: Path) -> Non
     """
     Extract external table references into dbt sources YAML file.
     Only includes tables that are not refs to other models.
+    Prefers non-BASE versions when both BASE and non-BASE exist.
     """
     sources_by_db_schema: dict[tuple[str, str], set[str]] = defaultdict(set)
 
@@ -137,8 +138,11 @@ def extract_sources(categorized: list[CategorizedRefs], output_dir: Path) -> Non
     for (db, schema), tables in sorted(sources_by_db_schema.items()):
         source_name = _build_source_name(db, schema)
 
+        # Filter out BASE tables (non-BASE versions always exist)
+        deduplicated_tables = _deduplicate_base_tables(tables)
+
         table_entries = []
-        for t in sorted(tables):
+        for t in sorted(deduplicated_tables):
             entry = {"name": to_snake_case(t) if _is_mixed_case(t) else t}
             if _is_mixed_case(t):
                 entry["identifier"] = t
@@ -167,6 +171,15 @@ def extract_sources(categorized: list[CategorizedRefs], output_dir: Path) -> Non
     logger.info(f"Wrote sources to {sources_path}")
 
     _log_incomplete_sources(sources_by_db_schema)
+
+
+def _deduplicate_base_tables(tables: set[str]) -> set[str]:
+    """
+    Filter out BASE tables since non-BASE versions always exist.
+
+    PatientBASE is always accompanied by Patient, so we just skip BASE tables.
+    """
+    return {t for t in tables if not t.endswith("BASE")}
 
 
 def extract_refs(categorized: list[CategorizedRefs], output_dir: Path) -> None:
@@ -203,6 +216,26 @@ def inject_dbt_macros(categorized: list[CategorizedRefs]) -> None:
     Inject {{ ref() }} and {{ source() }} macros into the converted SQL files.
     Replaces table references with appropriate dbt macros.
     """
+    # First, collect ALL sources across all models to determine canonical names
+    # This lets us know if Patient exists when we see PatientBASE
+    all_sources_by_location: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for cat in categorized:
+        for source in cat.sources:
+            all_sources_by_location[(source.database, source.schema)].add(source.table)
+
+    # Build a map of canonical table names (preferring non-BASE)
+    canonical_names: dict[tuple[str, str, str], str] = {}
+    for (db, schema), tables in all_sources_by_location.items():
+        non_base_tables_lower = {strip_base_suffix(t).lower(): strip_base_suffix(t)
+                                  for t in tables if not t.endswith("BASE")}
+        for table in tables:
+            stripped = strip_base_suffix(table)
+            if table.endswith("BASE") and stripped.lower() in non_base_tables_lower:
+                # Use the non-BASE version's actual casing
+                canonical_names[(db, schema, table)] = non_base_tables_lower[stripped.lower()]
+            else:
+                canonical_names[(db, schema, table)] = stripped
+
     for cat in categorized:
         output_path = cat.output_path
         if not output_path.exists():
@@ -218,7 +251,11 @@ def inject_dbt_macros(categorized: list[CategorizedRefs]) -> None:
         # Replace sources (external tables)
         for source in cat.sources:
             source_name = _build_source_name(source.database, source.schema)
-            table_name = to_snake_case(source.table) if _is_mixed_case(source.table) else source.table
+            canonical_table = canonical_names.get(
+                (source.database, source.schema, source.table),
+                strip_base_suffix(source.table)
+            )
+            table_name = to_snake_case(canonical_table) if _is_mixed_case(canonical_table) else canonical_table
             sql = _replace_table_with_source(sql, source, source_name, table_name)
 
         output_path.write_text(sql, encoding="utf-8")
