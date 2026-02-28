@@ -184,11 +184,20 @@ def extract_sources(categorized: list[CategorizedRefs], output_dir: Path) -> Non
 
 def _deduplicate_base_tables(tables: set[str]) -> set[str]:
     """
-    Filter out BASE tables since non-BASE versions always exist.
+    Convert BASE tables to non-BASE and deduplicate.
 
-    PatientBASE is always accompanied by Patient, so we just skip BASE tables.
+    PatientBASE -> Patient (strip BASE suffix)
+    If both Patient and PatientBASE exist, result is just Patient.
+    Case-insensitive check for 'BASE' suffix.
     """
-    return {t for t in tables if not t.endswith("BASE")}
+    result = set()
+    for t in tables:
+        if t.upper().endswith("BASE"):
+            # Strip BASE suffix to get canonical name
+            result.add(strip_base_suffix(t))
+        else:
+            result.add(t)
+    return result
 
 
 def extract_refs(categorized: list[CategorizedRefs], output_dir: Path) -> None:

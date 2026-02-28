@@ -86,9 +86,10 @@ class TestStripBaseSuffix:
         # Only strip if at the end
         assert strip_base_suffix("BASEPopulation") == "BASEPopulation"
 
-    def test_lowercase_base_not_stripped(self):
-        # Only strip uppercase BASE
-        assert strip_base_suffix("PopulationSpellbase") == "PopulationSpellbase"
+    def test_lowercase_base_also_stripped(self):
+        # Strip any case of BASE suffix
+        assert strip_base_suffix("PopulationSpellbase") == "PopulationSpell"
+        assert strip_base_suffix("PopulationSpellBase") == "PopulationSpell"
 
     def test_empty_string(self):
         assert strip_base_suffix("") == ""

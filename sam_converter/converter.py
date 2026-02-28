@@ -94,12 +94,12 @@ def extract_table_references(sql: str) -> list[TableRef]:
 
 def strip_base_suffix(name: str) -> str:
     """
-    Strip the 'BASE' suffix from a name if present.
+    Strip the 'BASE' suffix from a name if present (case-insensitive).
 
     This handles legacy naming conventions where tables/views
-    were suffixed with 'BASE' (e.g., 'PopulationSpellBASE' -> 'PopulationSpell').
+    were suffixed with 'BASE' or 'Base' (e.g., 'PopulationSpellBASE' -> 'PopulationSpell').
     """
-    if name.endswith("BASE"):
+    if name.upper().endswith("BASE"):
         return name[:-4]
     return name
 
