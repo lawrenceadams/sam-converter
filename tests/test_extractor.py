@@ -236,6 +236,31 @@ class TestCategorizeRefs:
         assert len(cat_patient.sources) == 1
         assert cat_patient.sources[0].table == "LabResults"
 
+    def test_base_suffix_stripped_for_ref_matching(self):
+        """Tables with BASE suffix should match models without BASE suffix."""
+        results = [
+            ConversionResult(
+                model_name="PopulationSpell",  # Model name has BASE stripped
+                output_path=Path("PopulationSpell.sql"),
+                table_refs=[
+                    # References another table with BASE suffix
+                    TableRef(database="SAM", schema="MEG", table="EncountersBASE"),
+                ],
+            ),
+            ConversionResult(
+                model_name="Encounters",  # Model name has BASE stripped
+                output_path=Path("Encounters.sql"),
+                table_refs=[],
+            ),
+        ]
+
+        categorized = categorize_refs(results)
+
+        cat_pop = next(c for c in categorized if c.model_name == "PopulationSpell")
+        # EncountersBASE should match Encounters and become a ref
+        assert cat_pop.refs == ["Encounters"]
+        assert cat_pop.sources == []
+
 
 class TestExtractSources:
     def _make_categorized(self, sources: list[TableRef]) -> list[CategorizedRefs]:
@@ -379,9 +404,9 @@ class TestExtractSources:
 
         tables = {t["name"]: t for t in sources["sources"][0]["tables"]}
 
-        # Mixed case gets lowercase name + identifier
-        assert tables["patientdata"]["name"] == "patientdata"
-        assert tables["patientdata"]["identifier"] == "PatientData"
+        # Mixed case gets snake_case name + identifier
+        assert tables["patient_data"]["name"] == "patient_data"
+        assert tables["patient_data"]["identifier"] == "PatientData"
 
         # All lowercase - no identifier
         assert tables["lowercase"]["name"] == "lowercase"
@@ -524,8 +549,8 @@ class TestInjectDbtMacros:
         inject_dbt_macros(categorized)
 
         result = sql_file.read_text()
-        # Mixed case gets lowercased name in source macro
-        assert "{{ source('db_schema', 'patientdata') }}" in result
+        # Mixed case gets snake_case name in source macro
+        assert "{{ source('db_schema', 'patient_data') }}" in result
 
     def test_handles_both_refs_and_sources(self, tmp_output_dir: Path):
         sql_file = tmp_output_dir / "dim_patients.sql"
@@ -548,3 +573,48 @@ class TestInjectDbtMacros:
         result = sql_file.read_text()
         assert "{{ ref('staging_patients') }}" in result
         assert "{{ source('healthcatalyst_raw', 'encounters') }}" in result
+
+    def test_replaces_base_suffix_tables_with_ref(self, tmp_output_dir: Path):
+        """Tables with BASE suffix should be replaced with ref() using the snake_case name."""
+        sql_file = tmp_output_dir / "population_spell.sql"
+        sql_file.write_text(
+            "SELECT * FROM SAM.MEG.PopulationSpellBASE pop "
+            "JOIN SAM.MEG.EncountersBASE enc ON pop.id = enc.id"
+        )
+
+        categorized = [
+            CategorizedRefs(
+                model_name="population_spell",
+                output_path=sql_file,
+                refs=["encounters"],  # Only encounters is a ref (not self)
+                sources=[],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        # EncountersBASE should be replaced with ref('encounters')
+        assert "{{ ref('encounters') }}" in result
+        # The original BASE reference should be gone
+        assert "EncountersBASE" not in result
+
+    def test_replaces_unqualified_base_suffix_with_ref(self, tmp_output_dir: Path):
+        """Unqualified tables with BASE suffix should also be replaced."""
+        sql_file = tmp_output_dir / "model.sql"
+        sql_file.write_text("SELECT * FROM OtherTableBASE")
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model",
+                output_path=sql_file,
+                refs=["other_table"],
+                sources=[],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        assert "{{ ref('other_table') }}" in result
+        assert "OtherTableBASE" not in result

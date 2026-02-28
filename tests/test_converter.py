@@ -5,6 +5,8 @@ from sam_converter.converter import (
     transpile_tsql_to_snowflake,
     extract_table_references,
     extract_model_name,
+    strip_base_suffix,
+    to_snake_case,
     convert_file,
     convert_directory,
     TableRef,
@@ -47,21 +49,72 @@ class TestTranspileTsqlToSnowflake:
         assert "CAST" in result or "TRY_CAST" in result
 
 
+class TestToSnakeCase:
+    def test_mixed_case(self):
+        assert to_snake_case("PatientData") == "patient_data"
+
+    def test_multiple_words(self):
+        assert to_snake_case("PopulationSpell") == "population_spell"
+
+    def test_acronym(self):
+        assert to_snake_case("HTTPServer") == "http_server"
+
+    def test_already_snake_case(self):
+        assert to_snake_case("already_snake") == "already_snake"
+
+    def test_single_word(self):
+        assert to_snake_case("Patient") == "patient"
+
+    def test_lowercase(self):
+        assert to_snake_case("lowercase") == "lowercase"
+
+    def test_all_uppercase(self):
+        assert to_snake_case("UPPERCASE") == "uppercase"
+
+    def test_mixed_with_numbers(self):
+        assert to_snake_case("Patient2Data") == "patient2_data"
+
+
+class TestStripBaseSuffix:
+    def test_strips_base_suffix(self):
+        assert strip_base_suffix("PopulationSpellBASE") == "PopulationSpell"
+
+    def test_no_base_suffix(self):
+        assert strip_base_suffix("PopulationSpell") == "PopulationSpell"
+
+    def test_base_in_middle(self):
+        # Only strip if at the end
+        assert strip_base_suffix("BASEPopulation") == "BASEPopulation"
+
+    def test_lowercase_base_not_stripped(self):
+        # Only strip uppercase BASE
+        assert strip_base_suffix("PopulationSpellbase") == "PopulationSpellbase"
+
+    def test_empty_string(self):
+        assert strip_base_suffix("") == ""
+
+
 class TestExtractModelName:
     def test_simple_name(self):
         assert extract_model_name("my_model") == "my_model"
 
     def test_qualified_db_schema_table(self):
-        assert extract_model_name("db.schema.TableName") == "TableName"
+        assert extract_model_name("db.schema.TableName") == "table_name"
 
     def test_schema_table(self):
-        assert extract_model_name("schema.TableName") == "TableName"
+        assert extract_model_name("schema.TableName") == "table_name"
 
     def test_multiple_dots(self):
-        assert extract_model_name("a.b.c.d.TableName") == "TableName"
+        assert extract_model_name("a.b.c.d.TableName") == "table_name"
 
-    def test_preserves_case(self):
-        assert extract_model_name("SAM.dbo.PatientData") == "PatientData"
+    def test_converts_to_snake_case(self):
+        assert extract_model_name("SAM.dbo.PatientData") == "patient_data"
+
+    def test_strips_base_suffix_and_converts(self):
+        assert extract_model_name("SAM.MEG.PopulationSpellBASE") == "population_spell"
+
+    def test_strips_base_from_simple_name(self):
+        assert extract_model_name("PatientDataBASE") == "patient_data"
 
 
 class TestExtractTableReferences:
@@ -188,14 +241,14 @@ class TestConvertFile:
         assert result.table_refs[0].table == "my_table"
 
     def test_qualified_filename_extracts_model_name(self, tmp_input_dir: Path, tmp_output_dir: Path):
-        """Files like db.schema.TableName.sql should have model_name = TableName."""
+        """Files like db.schema.TableName.sql should have model_name = table_name."""
         input_file = tmp_input_dir / "SAM.dbo.PatientData.sql"
         input_file.write_text("SELECT * FROM SAM.dbo.Encounters")
 
-        output_file = tmp_output_dir / "PatientData.sql"
+        output_file = tmp_output_dir / "patient_data.sql"
         result = convert_file(input_file, output_file)
 
-        assert result.model_name == "PatientData"
+        assert result.model_name == "patient_data"
 
     def test_creates_output_directory(self, tmp_input_dir: Path, tmp_path: Path):
         input_file = tmp_input_dir / "test.sql"
@@ -248,8 +301,8 @@ class TestConvertDirectory:
         assert len(results) == 1
         assert results[0].model_name == "my_model"
 
-    def test_qualified_filenames_produce_simple_output_names(self, tmp_input_dir: Path, tmp_output_dir: Path):
-        """Files like SAM.dbo.TableName.sql should output as TableName.sql."""
+    def test_qualified_filenames_produce_snake_case_output_names(self, tmp_input_dir: Path, tmp_output_dir: Path):
+        """Files like SAM.dbo.TableName.sql should output as table_name.sql."""
         (tmp_input_dir / "SAM.dbo.PatientData.sql").write_text("SELECT * FROM SAM.dbo.Encounters")
         (tmp_input_dir / "SAM.dbo.Encounters.sql").write_text("SELECT * FROM SAM.dbo.External")
 
@@ -257,10 +310,10 @@ class TestConvertDirectory:
 
         assert len(results) == 2
 
-        # Output files should have simple names
-        assert (tmp_output_dir / "PatientData.sql").exists()
-        assert (tmp_output_dir / "Encounters.sql").exists()
+        # Output files should have snake_case names
+        assert (tmp_output_dir / "patient_data.sql").exists()
+        assert (tmp_output_dir / "encounters.sql").exists()
 
-        # Model names should be extracted correctly
+        # Model names should be snake_case
         model_names = {r.model_name for r in results}
-        assert model_names == {"PatientData", "Encounters"}
+        assert model_names == {"patient_data", "encounters"}

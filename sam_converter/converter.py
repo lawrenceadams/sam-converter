@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,15 +92,45 @@ def extract_table_references(sql: str) -> list[TableRef]:
     return tables
 
 
+def strip_base_suffix(name: str) -> str:
+    """
+    Strip the 'BASE' suffix from a name if present.
+
+    This handles legacy naming conventions where tables/views
+    were suffixed with 'BASE' (e.g., 'PopulationSpellBASE' -> 'PopulationSpell').
+    """
+    if name.endswith("BASE"):
+        return name[:-4]
+    return name
+
+
+def to_snake_case(name: str) -> str:
+    """Convert MixedCase/PascalCase to snake_case.
+
+    Examples:
+        PatientData -> patient_data
+        PopulationSpell -> population_spell
+        HTTPServer -> http_server
+        already_snake -> already_snake
+    """
+    # Insert underscore before uppercase letters, then lowercase
+    s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
 def extract_model_name(filename_stem: str) -> str:
     """
     Extract the model name from a filename stem.
 
-    Handles filenames in the format 'db.schema.TableName' by taking
-    only the last part (the actual table name).
+    Handles filenames in the format 'db.schema.TableNameBASE' by:
+    1. Taking only the last part (the actual table name)
+    2. Stripping the 'BASE' suffix if present
+    3. Converting MixedCase to snake_case
     """
     parts = filename_stem.split(".")
-    return parts[-1]
+    name = parts[-1]
+    name = strip_base_suffix(name)
+    return to_snake_case(name)
 
 
 def convert_file(input_path: Path, output_path: Path) -> ConversionResult:
