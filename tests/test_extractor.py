@@ -575,8 +575,8 @@ class TestInjectDbtMacros:
         assert "{{ source('healthcatalyst_raw', 'encounters') }}" in result
 
     def test_replaces_base_suffix_tables_with_ref(self, tmp_output_dir: Path):
-        """Tables with BASE suffix should be replaced with ref() using the snake_case name."""
-        sql_file = tmp_output_dir / "population_spell.sql"
+        """Tables with BASE suffix should be replaced with ref() using the stripped name."""
+        sql_file = tmp_output_dir / "PopulationSpell.sql"
         sql_file.write_text(
             "SELECT * FROM SAM.MEG.PopulationSpellBASE pop "
             "JOIN SAM.MEG.EncountersBASE enc ON pop.id = enc.id"
@@ -584,9 +584,9 @@ class TestInjectDbtMacros:
 
         categorized = [
             CategorizedRefs(
-                model_name="population_spell",
+                model_name="PopulationSpell",
                 output_path=sql_file,
-                refs=["encounters"],  # Only encounters is a ref (not self)
+                refs=["Encounters"],  # Only Encounters is a ref (not self)
                 sources=[],
             ),
         ]
@@ -594,8 +594,8 @@ class TestInjectDbtMacros:
         inject_dbt_macros(categorized)
 
         result = sql_file.read_text()
-        # EncountersBASE should be replaced with ref('encounters')
-        assert "{{ ref('encounters') }}" in result
+        # EncountersBASE should be replaced with ref('Encounters')
+        assert "{{ ref('Encounters') }}" in result
         # The original BASE reference should be gone
         assert "EncountersBASE" not in result
 
@@ -608,7 +608,7 @@ class TestInjectDbtMacros:
             CategorizedRefs(
                 model_name="model",
                 output_path=sql_file,
-                refs=["other_table"],
+                refs=["OtherTable"],
                 sources=[],
             ),
         ]
@@ -616,5 +616,31 @@ class TestInjectDbtMacros:
         inject_dbt_macros(categorized)
 
         result = sql_file.read_text()
-        assert "{{ ref('other_table') }}" in result
+        assert "{{ ref('OtherTable') }}" in result
         assert "OtherTableBASE" not in result
+
+    def test_does_not_double_replace_refs(self, tmp_output_dir: Path):
+        """Ensure refs are not replaced multiple times (no nested refs)."""
+        sql_file = tmp_output_dir / "model.sql"
+        sql_file.write_text(
+            "SELECT * FROM WardHistoryAndLinkedShifts wh "
+            "JOIN SAM.MEG.WardHistoryAndLinkedShifts w2 ON wh.id = w2.id"
+        )
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model",
+                output_path=sql_file,
+                refs=["WardHistoryAndLinkedShifts"],
+                sources=[],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        # Should have refs, but no nested refs
+        assert "{{ ref('WardHistoryAndLinkedShifts') }}" in result
+        assert "{{ ref('{{ ref(" not in result
+        # Count occurrences - should be exactly 2 (one for each table reference)
+        assert result.count("{{ ref('WardHistoryAndLinkedShifts') }}") == 2

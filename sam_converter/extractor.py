@@ -225,64 +225,32 @@ def inject_dbt_macros(categorized: list[CategorizedRefs]) -> None:
         logger.info(f"Injected dbt macros into {output_path}")
 
 
-def _snake_to_flexible_pattern(snake_name: str) -> str:
-    """Convert snake_case name to a regex pattern matching both snake_case and MixedCase.
-
-    Examples:
-        patient_data -> [Pp]atient_?[Dd]ata  (matches PatientData, patient_data, etc.)
-        http_server -> [Hh][Tt][Tt][Pp]_?[Ss]erver  (matches HTTPServer, http_server)
-    """
-    parts = snake_name.split('_')
-    pattern_parts = []
-
-    for part in parts:
-        if not part:
-            continue
-        # For each part, match either original case or title case
-        # First char can be upper or lower
-        if len(part) == 1:
-            pattern_parts.append(f'[{part.upper()}{part.lower()}]')
-        else:
-            # Check if it's an acronym (all same letter repeated isn't acronym, but things like 'http' are)
-            first_char = f'[{part[0].upper()}{part[0].lower()}]'
-            rest = re.escape(part[1:])
-            pattern_parts.append(f'{first_char}{rest}')
-
-    # Join parts with optional underscore between them
-    return '_?'.join(pattern_parts)
-
-
 def _replace_table_with_ref(sql: str, model_name: str) -> str:
     """Replace table reference with {{ ref('model_name') }}.
 
     Handles both the model name and the model name with BASE suffix,
     since the original SQL may reference 'TableNameBASE' but we want
     to replace it with ref('TableName').
-
-    The model_name is in snake_case, but the original SQL may have MixedCase,
-    so we generate patterns that match both forms.
     """
     ref_macro = f"{{{{ ref('{model_name}') }}}}"
-
-    # Generate a flexible pattern that matches both snake_case and MixedCase
-    name_pattern = _snake_to_flexible_pattern(model_name)
 
     # Match fully qualified references first (db.schema.table or db.schema.tableBASE)
     # Then schema qualified (schema.table or schema.tableBASE)
     # Then unqualified (table or tableBASE)
+    # Use negative lookbehind to avoid replacing text already inside ref('...') or source('...')
     patterns = [
         # Fully qualified with BASE
-        rf'\b\w+\.\w+\.{name_pattern}BASE\b(?!\s*\()',
+        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.\w+\.{re.escape(model_name)}BASE\b(?!\s*\()",
         # Fully qualified without BASE
-        rf'\b\w+\.\w+\.{name_pattern}\b(?!\s*\()',
+        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.\w+\.{re.escape(model_name)}\b(?!\s*\()",
         # Schema qualified with BASE
-        rf'\b\w+\.{name_pattern}BASE\b(?!\s*\()',
+        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.{re.escape(model_name)}BASE\b(?!\s*\()",
         # Schema qualified without BASE
-        rf'\b\w+\.{name_pattern}\b(?!\s*\()',
+        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.{re.escape(model_name)}\b(?!\s*\()",
         # Unqualified with BASE
-        rf'\b{name_pattern}BASE\b(?!\s*\()',
+        rf"(?<!ref\(')(?<!source\(', ')\b{re.escape(model_name)}BASE\b(?!\s*\()",
         # Unqualified without BASE
-        rf'\b{name_pattern}\b(?!\s*\()',
+        rf"(?<!ref\(')(?<!source\(', ')\b{re.escape(model_name)}\b(?!\s*\()",
     ]
 
     for pattern in patterns:

@@ -125,12 +125,10 @@ def extract_model_name(filename_stem: str) -> str:
     Handles filenames in the format 'db.schema.TableNameBASE' by:
     1. Taking only the last part (the actual table name)
     2. Stripping the 'BASE' suffix if present
-    3. Converting MixedCase to snake_case
     """
     parts = filename_stem.split(".")
     name = parts[-1]
-    name = strip_base_suffix(name)
-    return to_snake_case(name)
+    return strip_base_suffix(name)
 
 
 def convert_file(input_path: Path, output_path: Path) -> ConversionResult:
