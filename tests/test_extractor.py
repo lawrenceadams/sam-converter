@@ -8,6 +8,7 @@ from sam_converter.extractor import (
     categorize_refs,
     extract_sources,
     extract_refs,
+    inject_dbt_macros,
     _build_source_name,
     _is_mixed_case,
     CategorizedRefs,
@@ -211,7 +212,7 @@ class TestCategorizeRefs:
 
 class TestExtractSources:
     def _make_categorized(self, sources: list[TableRef]) -> list[CategorizedRefs]:
-        return [CategorizedRefs(model_name="test", refs=[], sources=sources)]
+        return [CategorizedRefs(model_name="test", output_path=Path("test.sql"), refs=[], sources=sources)]
 
     def test_creates_sources_yml(self, tmp_output_dir: Path):
         categorized = self._make_categorized([
@@ -227,6 +228,7 @@ class TestExtractSources:
         categorized = [
             CategorizedRefs(
                 model_name="model1",
+                output_path=Path("model1.sql"),
                 refs=[],
                 sources=[
                     TableRef(database="db1", schema="schema1", table="table1"),
@@ -235,6 +237,7 @@ class TestExtractSources:
             ),
             CategorizedRefs(
                 model_name="model2",
+                output_path=Path("model2.sql"),
                 refs=[],
                 sources=[
                     TableRef(database="db1", schema="schema1", table="table3"),
@@ -309,7 +312,7 @@ class TestExtractSources:
         assert "schema" not in source
 
     def test_empty_sources(self, tmp_output_dir: Path):
-        categorized = [CategorizedRefs(model_name="test", refs=[], sources=[])]
+        categorized = [CategorizedRefs(model_name="test", output_path=Path("test.sql"), refs=[], sources=[])]
         extract_sources(categorized, tmp_output_dir)
 
         sources_path = tmp_output_dir / "sources.yml"
@@ -365,7 +368,7 @@ class TestExtractSources:
 class TestExtractRefs:
     def test_creates_refs_yml_when_refs_exist(self, tmp_output_dir: Path):
         categorized = [
-            CategorizedRefs(model_name="model_a", refs=["model_b", "model_c"], sources=[]),
+            CategorizedRefs(model_name="model_a", output_path=Path("model_a.sql"), refs=["model_b", "model_c"], sources=[]),
         ]
 
         extract_refs(categorized, tmp_output_dir)
@@ -383,7 +386,7 @@ class TestExtractRefs:
 
     def test_no_file_when_no_refs(self, tmp_output_dir: Path):
         categorized = [
-            CategorizedRefs(model_name="model_a", refs=[], sources=[]),
+            CategorizedRefs(model_name="model_a", output_path=Path("model_a.sql"), refs=[], sources=[]),
         ]
 
         extract_refs(categorized, tmp_output_dir)
@@ -393,9 +396,9 @@ class TestExtractRefs:
 
     def test_multiple_models_with_refs(self, tmp_output_dir: Path):
         categorized = [
-            CategorizedRefs(model_name="model_a", refs=["model_c"], sources=[]),
-            CategorizedRefs(model_name="model_b", refs=["model_c"], sources=[]),
-            CategorizedRefs(model_name="model_c", refs=[], sources=[]),
+            CategorizedRefs(model_name="model_a", output_path=Path("model_a.sql"), refs=["model_c"], sources=[]),
+            CategorizedRefs(model_name="model_b", output_path=Path("model_b.sql"), refs=["model_c"], sources=[]),
+            CategorizedRefs(model_name="model_c", output_path=Path("model_c.sql"), refs=[], sources=[]),
         ]
 
         extract_refs(categorized, tmp_output_dir)
@@ -410,7 +413,7 @@ class TestExtractRefs:
 
     def test_refs_sorted_alphabetically(self, tmp_output_dir: Path):
         categorized = [
-            CategorizedRefs(model_name="model_a", refs=["zebra", "alpha", "middle"], sources=[]),
+            CategorizedRefs(model_name="model_a", output_path=Path("model_a.sql"), refs=["zebra", "alpha", "middle"], sources=[]),
         ]
 
         extract_refs(categorized, tmp_output_dir)
@@ -420,3 +423,101 @@ class TestExtractRefs:
             refs = yaml.safe_load(f)
 
         assert refs["model_refs"][0]["depends_on"] == ["alpha", "middle", "zebra"]
+
+
+class TestInjectDbtMacros:
+    def test_injects_ref_macro(self, tmp_output_dir: Path):
+        sql_file = tmp_output_dir / "model_a.sql"
+        sql_file.write_text("SELECT * FROM staging_users JOIN staging_orders ON id = id")
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model_a",
+                output_path=sql_file,
+                refs=["staging_users", "staging_orders"],
+                sources=[],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        assert "{{ ref('staging_users') }}" in result
+        assert "{{ ref('staging_orders') }}" in result
+
+    def test_injects_source_macro_fully_qualified(self, tmp_output_dir: Path):
+        sql_file = tmp_output_dir / "model_a.sql"
+        sql_file.write_text("SELECT * FROM HealthCatalyst.raw.Patients")
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model_a",
+                output_path=sql_file,
+                refs=[],
+                sources=[TableRef(database="HealthCatalyst", schema="raw", table="Patients")],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        assert "{{ source('healthcatalyst_raw', 'patients') }}" in result
+
+    def test_injects_source_macro_schema_qualified(self, tmp_output_dir: Path):
+        sql_file = tmp_output_dir / "model_a.sql"
+        sql_file.write_text("SELECT * FROM raw.patients")
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model_a",
+                output_path=sql_file,
+                refs=[],
+                sources=[TableRef(database="", schema="raw", table="patients")],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        assert "{{ source('raw', 'patients') }}" in result
+
+    def test_preserves_mixed_case_in_source(self, tmp_output_dir: Path):
+        sql_file = tmp_output_dir / "model_a.sql"
+        sql_file.write_text("SELECT * FROM db.schema.PatientData")
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model_a",
+                output_path=sql_file,
+                refs=[],
+                sources=[TableRef(database="db", schema="schema", table="PatientData")],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        # Mixed case gets lowercased name in source macro
+        assert "{{ source('db_schema', 'patientdata') }}" in result
+
+    def test_handles_both_refs_and_sources(self, tmp_output_dir: Path):
+        sql_file = tmp_output_dir / "dim_patients.sql"
+        sql_file.write_text(
+            "SELECT * FROM staging_patients "
+            "JOIN HealthCatalyst.raw.Encounters ON id = id"
+        )
+
+        categorized = [
+            CategorizedRefs(
+                model_name="dim_patients",
+                output_path=sql_file,
+                refs=["staging_patients"],
+                sources=[TableRef(database="HealthCatalyst", schema="raw", table="Encounters")],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        assert "{{ ref('staging_patients') }}" in result
+        assert "{{ source('healthcatalyst_raw', 'encounters') }}" in result

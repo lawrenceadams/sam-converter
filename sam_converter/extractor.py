@@ -1,4 +1,5 @@
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 class CategorizedRefs:
     """Categorized table references for a model."""
     model_name: str
+    output_path: Path
     refs: list[str] = field(default_factory=list)  # references to other models
     sources: list[TableRef] = field(default_factory=list)  # external source tables
 
@@ -74,6 +76,7 @@ def categorize_refs(results: list[ConversionResult]) -> list[CategorizedRefs]:
 
         categorized.append(CategorizedRefs(
             model_name=result.model_name,
+            output_path=result.output_path,
             refs=refs,
             sources=sources,
         ))
@@ -191,6 +194,74 @@ def extract_refs(categorized: list[CategorizedRefs], output_dir: Path) -> None:
         yaml.dump(refs_yaml, f, default_flow_style=False, sort_keys=False)
 
     logger.info(f"Wrote model refs to {refs_path}")
+
+
+def inject_dbt_macros(categorized: list[CategorizedRefs]) -> None:
+    """
+    Inject {{ ref() }} and {{ source() }} macros into the converted SQL files.
+    Replaces table references with appropriate dbt macros.
+    """
+    for cat in categorized:
+        output_path = cat.output_path
+        if not output_path.exists():
+            logger.warning(f"Output file not found: {output_path}")
+            continue
+
+        sql = output_path.read_text(encoding="utf-8")
+
+        # Replace refs (references to other models)
+        for ref_model in cat.refs:
+            sql = _replace_table_with_ref(sql, ref_model)
+
+        # Replace sources (external tables)
+        for source in cat.sources:
+            source_name = _build_source_name(source.database, source.schema)
+            table_name = source.table.lower() if _is_mixed_case(source.table) else source.table
+            sql = _replace_table_with_source(sql, source, source_name, table_name)
+
+        output_path.write_text(sql, encoding="utf-8")
+        logger.info(f"Injected dbt macros into {output_path}")
+
+
+def _replace_table_with_ref(sql: str, model_name: str) -> str:
+    """Replace table reference with {{ ref('model_name') }}."""
+    ref_macro = f"{{{{ ref('{model_name}') }}}}"
+
+    # Match the table name with optional alias, case-insensitive
+    # Handles: table_name, table_name AS alias, table_name alias
+    pattern = rf'\b{re.escape(model_name)}\b(?!\s*\()'
+
+    return re.sub(pattern, ref_macro, sql, flags=re.IGNORECASE)
+
+
+def _replace_table_with_source(sql: str, table_ref: TableRef, source_name: str, table_name: str) -> str:
+    """Replace table reference with {{ source('source_name', 'table_name') }}."""
+    source_macro = f"{{{{ source('{source_name}', '{table_name}') }}}}"
+
+    # Build patterns for different qualification levels
+    patterns = []
+
+    # Fully qualified: database.schema.table
+    if table_ref.database and table_ref.schema:
+        pattern = rf'\b{re.escape(table_ref.database)}\.{re.escape(table_ref.schema)}\.{re.escape(table_ref.table)}\b'
+        patterns.append(pattern)
+
+    # Schema qualified: schema.table
+    if table_ref.schema:
+        pattern = rf'\b{re.escape(table_ref.schema)}\.{re.escape(table_ref.table)}\b'
+        patterns.append(pattern)
+
+    # Unqualified: just table (be careful not to replace parts of other identifiers)
+    pattern = rf'\b{re.escape(table_ref.table)}\b(?!\s*\()'
+    patterns.append(pattern)
+
+    # Try patterns from most specific to least specific
+    for pattern in patterns:
+        if re.search(pattern, sql, flags=re.IGNORECASE):
+            sql = re.sub(pattern, source_macro, sql, flags=re.IGNORECASE)
+            break
+
+    return sql
 
 
 def _is_mixed_case(name: str) -> bool:

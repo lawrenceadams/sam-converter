@@ -5,7 +5,7 @@ from pathlib import Path
 import click
 
 from sam_converter.converter import convert_directory
-from sam_converter.extractor import categorize_refs, extract_sources, extract_refs
+from sam_converter.extractor import categorize_refs, extract_sources, extract_refs, inject_dbt_macros
 
 
 def setup_logging(verbose: bool) -> None:
@@ -41,6 +41,7 @@ def main(input_dir: Path, output: Path, verbose: bool) -> None:
 
     if results:
         categorized = categorize_refs(results)
+        inject_dbt_macros(categorized)
         extract_sources(categorized, output)
         extract_refs(categorized, output)
 

@@ -8,6 +8,7 @@ from sam_converter.extractor import (
     categorize_refs,
     extract_sources,
     extract_refs,
+    inject_dbt_macros,
     CategorizedRefs,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "categorize_refs",
     "extract_sources",
     "extract_refs",
+    "inject_dbt_macros",
     "CategorizedRefs",
 ]
