@@ -126,16 +126,25 @@ def extract_sources(categorized: list[CategorizedRefs], output_dir: Path) -> Non
     """
     Extract external table references into dbt sources YAML file.
     Only includes tables that are not refs to other models.
-    Prefers non-BASE versions when both BASE and non-BASE exist.
+    Filters out BASE tables (non-BASE versions always exist).
+    Merges sources with same name (case-insensitive db/schema matching).
     """
-    sources_by_db_schema: dict[tuple[str, str], set[str]] = defaultdict(set)
+    # Group by lowercased (db, schema) to merge case variants like EPIC/Epic
+    # Store original casing to use in output
+    sources_by_key: dict[tuple[str, str], set[str]] = defaultdict(set)
+    original_casing: dict[tuple[str, str], tuple[str, str]] = {}
 
     for cat in categorized:
         for ref in cat.sources:
-            sources_by_db_schema[(ref.database, ref.schema)].add(ref.table)
+            key = (ref.database.lower(), ref.schema.lower())
+            sources_by_key[key].add(ref.table)
+            # Keep first casing seen (or could normalize to title case)
+            if key not in original_casing:
+                original_casing[key] = (ref.database, ref.schema)
 
     sources_list = []
-    for (db, schema), tables in sorted(sources_by_db_schema.items()):
+    for key, tables in sorted(sources_by_key.items()):
+        db, schema = original_casing[key]
         source_name = _build_source_name(db, schema)
 
         # Filter out BASE tables (non-BASE versions always exist)
@@ -170,7 +179,7 @@ def extract_sources(categorized: list[CategorizedRefs], output_dir: Path) -> Non
 
     logger.info(f"Wrote sources to {sources_path}")
 
-    _log_incomplete_sources(sources_by_db_schema)
+    _log_incomplete_sources(sources_by_key)
 
 
 def _deduplicate_base_tables(tables: set[str]) -> set[str]:

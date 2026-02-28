@@ -440,6 +440,43 @@ class TestExtractSources:
         assert "patient_base" not in table_names
         assert "medical_history_base" not in table_names
 
+    def test_merges_sources_with_different_casing(self, tmp_output_dir: Path):
+        """Sources with same db/schema but different casing should be merged."""
+        categorized = [
+            CategorizedRefs(
+                model_name="model1",
+                output_path=Path("model1.sql"),
+                refs=[],
+                sources=[
+                    TableRef(database="EPIC", schema="Patient", table="Patient"),
+                ],
+            ),
+            CategorizedRefs(
+                model_name="model2",
+                output_path=Path("model2.sql"),
+                refs=[],
+                sources=[
+                    TableRef(database="Epic", schema="Patient", table="MedicalHistory"),
+                ],
+            ),
+        ]
+
+        extract_sources(categorized, tmp_output_dir)
+
+        sources_path = tmp_output_dir / "sources.yml"
+        with open(sources_path) as f:
+            sources = yaml.safe_load(f)
+
+        # Should only have one source entry (merged)
+        assert len(sources["sources"]) == 1
+
+        source = sources["sources"][0]
+        assert source["name"] == "epic_patient"
+
+        table_names = [t["name"] for t in source["tables"]]
+        assert "patient" in table_names
+        assert "medical_history" in table_names
+
 
 class TestExtractRefs:
     def test_creates_refs_yml_when_refs_exist(self, tmp_output_dir: Path):
