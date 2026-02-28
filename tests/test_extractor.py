@@ -729,3 +729,33 @@ class TestInjectDbtMacros:
         # Should use 'patient' not 'patient_base'
         assert "{{ source('db_schema', 'patient') }}" in result
         assert "patient_base" not in result
+
+    def test_replaces_quoted_identifiers(self, tmp_output_dir: Path):
+        """Should replace Snowflake-style quoted identifiers like "Epic"."Patient"."Table"."""
+        sql_file = tmp_output_dir / "model.sql"
+        sql_file.write_text(
+            'SELECT * FROM "Epic"."Patient"."MedicalHistory" AS p '
+            'LEFT JOIN "Epic"."Reference"."Diagnosis" AS d ON d.ID = p.ID'
+        )
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model",
+                output_path=sql_file,
+                refs=[],
+                sources=[
+                    TableRef(database="Epic", schema="Patient", table="MedicalHistory"),
+                    TableRef(database="Epic", schema="Reference", table="Diagnosis"),
+                ],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        # Quoted identifiers should be fully replaced with source macro
+        assert "{{ source('epic_patient', 'medical_history') }}" in result
+        assert "{{ source('epic_reference', 'diagnosis') }}" in result
+        # No leftover quoted parts
+        assert '"Epic"."Patient"' not in result
+        assert '"Epic"."Reference"' not in result

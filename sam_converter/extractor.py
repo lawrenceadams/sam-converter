@@ -286,8 +286,18 @@ def _replace_table_with_ref(sql: str, model_name: str) -> str:
     Handles both the model name and the model name with BASE suffix,
     since the original SQL may reference 'TableNameBASE' but we want
     to replace it with ref('TableName').
+
+    Handles both unquoted and quoted ("Table") identifiers.
     """
     ref_macro = f"{{{{ ref('{model_name}') }}}}"
+
+    # Pattern for quoted or unquoted identifier
+    def quoted_id(name: str) -> str:
+        escaped = re.escape(name)
+        return rf'(?:"{escaped}"|{escaped})'
+
+    # Pattern for any db/schema component (quoted or unquoted)
+    any_id = r'(?:"\w+"|\w+)'
 
     # Match fully qualified references first (db.schema.table or db.schema.tableBASE)
     # Then schema qualified (schema.table or schema.tableBASE)
@@ -295,17 +305,17 @@ def _replace_table_with_ref(sql: str, model_name: str) -> str:
     # Use negative lookbehind to avoid replacing text already inside ref('...') or source('...')
     patterns = [
         # Fully qualified with BASE
-        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.\w+\.{re.escape(model_name)}BASE\b(?!\s*\()",
+        rf"(?<!ref\(')(?<!source\(', '){any_id}\.{any_id}\.{quoted_id(model_name)}BASE\"?(?!\s*\()",
         # Fully qualified without BASE
-        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.\w+\.{re.escape(model_name)}\b(?!\s*\()",
+        rf"(?<!ref\(')(?<!source\(', '){any_id}\.{any_id}\.{quoted_id(model_name)}(?!\s*\()",
         # Schema qualified with BASE
-        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.{re.escape(model_name)}BASE\b(?!\s*\()",
+        rf"(?<!ref\(')(?<!source\(', '){any_id}\.{quoted_id(model_name)}BASE\"?(?!\s*\()",
         # Schema qualified without BASE
-        rf"(?<!ref\(')(?<!source\(', ')\b\w+\.{re.escape(model_name)}\b(?!\s*\()",
+        rf"(?<!ref\(')(?<!source\(', '){any_id}\.{quoted_id(model_name)}(?!\s*\()",
         # Unqualified with BASE
-        rf"(?<!ref\(')(?<!source\(', ')\b{re.escape(model_name)}BASE\b(?!\s*\()",
+        rf"(?<!ref\(')(?<!source\(', '){quoted_id(model_name)}BASE\"?(?!\s*\()",
         # Unqualified without BASE
-        rf"(?<!ref\(')(?<!source\(', ')\b{re.escape(model_name)}\b(?!\s*\()",
+        rf"(?<!ref\(')(?<!source\(', '){quoted_id(model_name)}(?!\s*\()",
     ]
 
     for pattern in patterns:
@@ -315,24 +325,32 @@ def _replace_table_with_ref(sql: str, model_name: str) -> str:
 
 
 def _replace_table_with_source(sql: str, table_ref: TableRef, source_name: str, table_name: str) -> str:
-    """Replace table reference with {{ source('source_name', 'table_name') }}."""
+    """Replace table reference with {{ source('source_name', 'table_name') }}.
+
+    Handles both unquoted (Epic.Patient.Table) and quoted ("Epic"."Patient"."Table") identifiers.
+    """
     source_macro = f"{{{{ source('{source_name}', '{table_name}') }}}}"
+
+    # Helper to make pattern that matches both quoted and unquoted identifier
+    def quoted_id(name: str) -> str:
+        escaped = re.escape(name)
+        return rf'(?:"{escaped}"|{escaped})'
 
     # Build patterns for different qualification levels
     patterns = []
 
-    # Fully qualified: database.schema.table
+    # Fully qualified: database.schema.table (quoted or unquoted)
     if table_ref.database and table_ref.schema:
-        pattern = rf'\b{re.escape(table_ref.database)}\.{re.escape(table_ref.schema)}\.{re.escape(table_ref.table)}\b'
+        pattern = rf'{quoted_id(table_ref.database)}\.{quoted_id(table_ref.schema)}\.{quoted_id(table_ref.table)}'
         patterns.append(pattern)
 
     # Schema qualified: schema.table
     if table_ref.schema:
-        pattern = rf'\b{re.escape(table_ref.schema)}\.{re.escape(table_ref.table)}\b'
+        pattern = rf'{quoted_id(table_ref.schema)}\.{quoted_id(table_ref.table)}'
         patterns.append(pattern)
 
     # Unqualified: just table (be careful not to replace parts of other identifiers)
-    pattern = rf'\b{re.escape(table_ref.table)}\b(?!\s*\()'
+    pattern = rf'{quoted_id(table_ref.table)}(?!\s*\()'
     patterns.append(pattern)
 
     # Try patterns from most specific to least specific
