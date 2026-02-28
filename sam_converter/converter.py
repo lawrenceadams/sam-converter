@@ -91,6 +91,17 @@ def extract_table_references(sql: str) -> list[TableRef]:
     return tables
 
 
+def extract_model_name(filename_stem: str) -> str:
+    """
+    Extract the model name from a filename stem.
+
+    Handles filenames in the format 'db.schema.TableName' by taking
+    only the last part (the actual table name).
+    """
+    parts = filename_stem.split(".")
+    return parts[-1]
+
+
 def convert_file(input_path: Path, output_path: Path) -> ConversionResult:
     """
     Convert a single T-SQL file to Snowflake SQL.
@@ -98,7 +109,7 @@ def convert_file(input_path: Path, output_path: Path) -> ConversionResult:
     """
     logger.info(f"Converting {input_path}")
 
-    model_name = input_path.stem
+    model_name = extract_model_name(input_path.stem)
     sql = input_path.read_text(encoding="utf-8")
 
     table_refs = extract_table_references(sql)
@@ -131,7 +142,8 @@ def convert_directory(input_dir: Path, output_dir: Path) -> list[ConversionResul
         return results
 
     for input_file in sql_files:
-        output_file = output_dir / f"{input_file.stem}.sql"
+        model_name = extract_model_name(input_file.stem)
+        output_file = output_dir / f"{model_name}.sql"
 
         try:
             result = convert_file(input_file, output_file)

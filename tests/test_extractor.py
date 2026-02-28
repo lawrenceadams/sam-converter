@@ -209,6 +209,33 @@ class TestCategorizeRefs:
         # Both should be refs (unqualified always is, qualified matches)
         assert cat_a.refs == ["model_b", "model_b"]
 
+    def test_qualified_refs_to_project_tables_become_refs(self):
+        """SAM.dbo.TableA referencing SAM.dbo.TableB should be a ref when both are in the project."""
+        results = [
+            ConversionResult(
+                model_name="PatientData",
+                output_path=Path("PatientData.sql"),
+                table_refs=[
+                    TableRef(database="SAM", schema="dbo", table="Encounters"),
+                    TableRef(database="External", schema="raw", table="LabResults"),
+                ],
+            ),
+            ConversionResult(
+                model_name="Encounters",
+                output_path=Path("Encounters.sql"),
+                table_refs=[],
+            ),
+        ]
+
+        categorized = categorize_refs(results)
+
+        cat_patient = next(c for c in categorized if c.model_name == "PatientData")
+        # Encounters is a project model, should be a ref
+        assert cat_patient.refs == ["Encounters"]
+        # LabResults is external, should be a source
+        assert len(cat_patient.sources) == 1
+        assert cat_patient.sources[0].table == "LabResults"
+
 
 class TestExtractSources:
     def _make_categorized(self, sources: list[TableRef]) -> list[CategorizedRefs]:

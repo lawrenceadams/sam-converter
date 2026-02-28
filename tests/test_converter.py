@@ -4,6 +4,7 @@ from pathlib import Path
 from sam_converter.converter import (
     transpile_tsql_to_snowflake,
     extract_table_references,
+    extract_model_name,
     convert_file,
     convert_directory,
     TableRef,
@@ -44,6 +45,23 @@ class TestTranspileTsqlToSnowflake:
         sql = "SELECT CONVERT(VARCHAR(50), col) FROM t"
         result = transpile_tsql_to_snowflake(sql)
         assert "CAST" in result or "TRY_CAST" in result
+
+
+class TestExtractModelName:
+    def test_simple_name(self):
+        assert extract_model_name("my_model") == "my_model"
+
+    def test_qualified_db_schema_table(self):
+        assert extract_model_name("db.schema.TableName") == "TableName"
+
+    def test_schema_table(self):
+        assert extract_model_name("schema.TableName") == "TableName"
+
+    def test_multiple_dots(self):
+        assert extract_model_name("a.b.c.d.TableName") == "TableName"
+
+    def test_preserves_case(self):
+        assert extract_model_name("SAM.dbo.PatientData") == "PatientData"
 
 
 class TestExtractTableReferences:
@@ -169,6 +187,16 @@ class TestConvertFile:
         assert len(result.table_refs) == 1
         assert result.table_refs[0].table == "my_table"
 
+    def test_qualified_filename_extracts_model_name(self, tmp_input_dir: Path, tmp_output_dir: Path):
+        """Files like db.schema.TableName.sql should have model_name = TableName."""
+        input_file = tmp_input_dir / "SAM.dbo.PatientData.sql"
+        input_file.write_text("SELECT * FROM SAM.dbo.Encounters")
+
+        output_file = tmp_output_dir / "PatientData.sql"
+        result = convert_file(input_file, output_file)
+
+        assert result.model_name == "PatientData"
+
     def test_creates_output_directory(self, tmp_input_dir: Path, tmp_path: Path):
         input_file = tmp_input_dir / "test.sql"
         input_file.write_text("SELECT 1")
@@ -219,3 +247,20 @@ class TestConvertDirectory:
 
         assert len(results) == 1
         assert results[0].model_name == "my_model"
+
+    def test_qualified_filenames_produce_simple_output_names(self, tmp_input_dir: Path, tmp_output_dir: Path):
+        """Files like SAM.dbo.TableName.sql should output as TableName.sql."""
+        (tmp_input_dir / "SAM.dbo.PatientData.sql").write_text("SELECT * FROM SAM.dbo.Encounters")
+        (tmp_input_dir / "SAM.dbo.Encounters.sql").write_text("SELECT * FROM SAM.dbo.External")
+
+        results = convert_directory(tmp_input_dir, tmp_output_dir)
+
+        assert len(results) == 2
+
+        # Output files should have simple names
+        assert (tmp_output_dir / "PatientData.sql").exists()
+        assert (tmp_output_dir / "Encounters.sql").exists()
+
+        # Model names should be extracted correctly
+        model_names = {r.model_name for r in results}
+        assert model_names == {"PatientData", "Encounters"}
