@@ -32,9 +32,15 @@ class ConversionResult:
 
 
 def transpile_tsql_to_snowflake(sql: str) -> str:
-    """Convert T-SQL to Snowflake SQL using sqlglot."""
+    """Convert T-SQL to Snowflake SQL using sqlglot.
+
+    Uses identify=True to quote all identifiers, preserving mixed case
+    column names in Snowflake (which uppercases unquoted identifiers).
+    """
     try:
-        return sqlglot.transpile(sql, read="tsql", write="snowflake", pretty=True)[0]
+        return sqlglot.transpile(
+            sql, read="tsql", write="snowflake", pretty=True, identify=True
+        )[0]
     except sqlglot.errors.ParseError as e:
         logger.error(f"Failed to parse SQL: {e}")
         raise
