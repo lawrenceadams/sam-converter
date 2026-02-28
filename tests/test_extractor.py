@@ -759,3 +759,29 @@ class TestInjectDbtMacros:
         # No leftover quoted parts
         assert '"Epic"."Patient"' not in result
         assert '"Epic"."Reference"' not in result
+
+    def test_replaces_quoted_refs_with_base_inside_quotes(self, tmp_output_dir: Path):
+        """Should replace "SAM"."MEG"."TableBASE" where BASE is inside the quotes."""
+        sql_file = tmp_output_dir / "model.sql"
+        sql_file.write_text(
+            'FROM "SAM"."MEG"."MaxPainScoresBASE" AS i '
+            'JOIN "SAM"."MEG"."MetricWardHistoryBASE" AS w ON i.id = w.id'
+        )
+
+        categorized = [
+            CategorizedRefs(
+                model_name="model",
+                output_path=sql_file,
+                refs=["MaxPainScores", "MetricWardHistory"],
+                sources=[],
+            ),
+        ]
+
+        inject_dbt_macros(categorized)
+
+        result = sql_file.read_text()
+        # Should be replaced with refs, no leftover quotes/schema
+        assert "{{ ref('MaxPainScores') }}" in result
+        assert "{{ ref('MetricWardHistory') }}" in result
+        assert '"SAM"."MEG"' not in result
+        assert "BASE" not in result
